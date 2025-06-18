@@ -1,13 +1,35 @@
+#!/usr/bin/env python3
+"""
+R3nameX - Batch File Renaming Tool
+Created by: Fabian Peña (stuxboynet)
+GitHub: https://github.com/stuxboynet/r3namex
+Version: 2.0.0
+License: BSD 3-Clause
+"""
+
 import os
 import argparse
 import sys
 import json
 import shutil
+import subprocess
+import tempfile
 from datetime import datetime
-from shlex import join
+from pathlib import Path
+try:
+    import urllib.request
+    import urllib.error
+except ImportError:
+    urllib = None
+
+# Version info - MUST be before BANNER
+__author__ = "Fabian Peña (stuxboynet)"
+__version__ = "2.0.0"
+__license__ = "BSD 3-Clause"
+__repo__ = "https://github.com/stuxboynet/r3namex"
 
 LOG_FILE = "logs.log"
-MAPPING_FILE = "backup_mapping.json"  # Cambiado a JSON para mejor estructura
+MAPPING_FILE = "backup_mapping.json"
 
 BANNER = """
   _____  ____                            __   __ 
@@ -17,7 +39,8 @@ BANNER = """
  | | \ \ ___) | | | | (_| | | | | | |  __// . \  
  |_|  \_\____/|_| |_|\__,_|_| |_| |_|\___/_/ \_\ 
                                                  
-"""
+        Created by Fabian Peña (stuxboynet)
+                    Version """ + __version__
 
 EXAMPLES = """
 EXAMPLES:
@@ -43,6 +66,98 @@ To handle duplicates:
     python r3namex.py --location /my/folder --prefix Photo --current-start 1 --current-end 5 --new-start 1 --duplicate-strategy suffix
 
 """
+
+
+def check_for_updates():
+    """Check GitHub for newer version"""
+    if urllib is None:
+        print("Error: urllib module not available for update check")
+        return
+    
+    try:
+        print("Checking for updates...")
+        url = f"{__repo__}/raw/main/r3namex.py"
+        
+        # Get remote version
+        response = urllib.request.urlopen(url, timeout=5)
+        content = response.read().decode('utf-8')
+        
+        # Extract version from remote file
+        for line in content.split('\n'):
+            if line.startswith('__version__') and '=' in line:
+                remote_version = line.split('"')[1]
+                break
+        else:
+            print("Could not determine remote version")
+            return
+        
+        # Compare versions
+        current = tuple(map(int, __version__.split('.')))
+        remote = tuple(map(int, remote_version.split('.')))
+        
+        if remote > current:
+            print(f"\n✨ New version available: {remote_version} (current: {__version__})")
+            print(f"📥 Download: {__repo__}/releases/latest")
+            
+            choice = input("\nDo you want to update now? [Y/N]: ").strip().lower()
+            if choice == 'y':
+                update_script(url)
+        else:
+            print(f"✓ You're using the latest version ({__version__})")
+            
+    except urllib.error.URLError as e:
+        print(f"Error checking for updates: Network error")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+
+
+def update_script(url):
+    """Download and replace current script with new version"""
+    try:
+        print("Downloading new version...")
+        
+        # Download to temporary file
+        with tempfile.NamedTemporaryFile(mode='wb', delete=False) as tmp:
+            response = urllib.request.urlopen(url)
+            tmp.write(response.read())
+            tmp_path = tmp.name
+        
+        # Backup current script
+        current_script = os.path.abspath(sys.argv[0])
+        backup_path = current_script + '.backup'
+        shutil.copy2(current_script, backup_path)
+        
+        # Replace with new version
+        shutil.move(tmp_path, current_script)
+        
+        # Make executable on Unix-like systems
+        if os.name != 'nt':
+            os.chmod(current_script, 0o755)
+        
+        print(f"✓ Update successful! Backup saved as: {backup_path}")
+        print("Please restart the script to use the new version.")
+        sys.exit(0)
+        
+    except Exception as e:
+        print(f"Error updating: {e}")
+        if 'tmp_path' in locals() and os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
+def show_version():
+    """Display version information"""
+    print(f"""{BANNER}
+
+R3nameX - Batch File Renaming Tool
+Version: {__version__}
+Author: {__author__}
+License: {__license__}
+GitHub: {__repo__}
+
+Python: {sys.version.split()[0]}
+Platform: {sys.platform}
+""")
+
 
 class RenameOperation:
     """Clase para representar una operación de renombrado"""
@@ -592,11 +707,19 @@ def rollback(directory):
 
 
 if __name__ == "__main__":
+    # Custom description with better formatting
+    description = """Batch file renaming tool with rollback functionality – efficient, simple, and powerful.
+
+Rename multiple files with custom prefixes and numbering, handle duplicates intelligently,
+and rollback changes when needed. Perfect for organizing photos, documents, and any file collections."""
+    
     parser = argparse.ArgumentParser(
-        description="Batch file renaming tool with rollback functionality – efficient, simple, and powerful.\n",
-        formatter_class=argparse.RawDescriptionHelpFormatter
+        description=description,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        add_help=False  # We'll handle help manually for custom formatting
     )
     
+    parser.add_argument("-h", "--help", action="store_true", help="Show this help message and exit")
     parser.add_argument("-l", "--location", help="Folder where files are located.")
     parser.add_argument("-p", "--prefix", help="Prefix of files (optional).")
     parser.add_argument("-a", "--all", action="store_true", help="Interactive rename for all files in directory and subfolders.")
@@ -609,16 +732,34 @@ if __name__ == "__main__":
                        default='ask',
                        help="How to handle duplicate filenames (default: ask)")
     
-    if len(sys.argv) == 1:
+    # Handle special arguments first
+    if len(sys.argv) == 1 or '--help' in sys.argv or '-h' in sys.argv:
         print(BANNER)
-        parser.print_help()
+        print("\n" + description + "\n")
+        print("Usage: r3namex.py [-h] [-l LOCATION] [-p PREFIX] [-a] [-cs CURRENT_START]")
+        print("                  [-ce CURRENT_END] [-ns NEW_START] [-r]")
+        print("                  [-ds {skip,suffix,backup,overwrite,ask}]\n")
+        print("Options:")
+        print("  -h, --help            Show this help message and exit")
+        print("  -l, --location        Folder where files are located")
+        print("  -p, --prefix          Prefix of files (optional)")
+        print("  -a, --all             Interactive rename for all files in directory and subfolders")
+        print("  -cs, --current-start  Start of current range")
+        print("  -ce, --current-end    End of current range")
+        print("  -ns, --new-start      New start point for renaming")
+        print("  -r, --rollback        Revert last renaming operation")
+        print("  -ds, --duplicate-strategy")
+        print("                        How to handle duplicate filenames (default: ask)")
+        print("                        Choices: skip, suffix, backup, overwrite, ask")
         print(EXAMPLES)
         sys.exit(0)
     
-    if '--help' in sys.argv or '-h' in sys.argv:
-        print(BANNER)
-        parser.print_help()
-        print(EXAMPLES)
+    if '--version' in sys.argv or '-v' in sys.argv:
+        show_version()
+        sys.exit(0)
+    
+    if '--update' in sys.argv or '-u' in sys.argv:
+        check_for_updates()
         sys.exit(0)
     
     try:
@@ -626,6 +767,8 @@ if __name__ == "__main__":
 
         # Nueva lógica para el renombrado interactivo
         if args.all:
+            if not args.location:
+                args.location = input("Enter the path to the folder where the files are located: ").strip()
             prefix = args.prefix or "File"
             start_number = args.new_start if args.new_start else 1
             rename_all_files_interactive(args.location, prefix, start_number, args.duplicate_strategy)
