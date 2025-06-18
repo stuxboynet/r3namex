@@ -383,15 +383,24 @@ def rename_all_files_interactive(directory, prefix=None, start_number=1, duplica
                 
                 # Preguntar si quiere cambiar el prefijo para esta carpeta
                 folder_prefix = current_prefix
-                if folder_prefix is None or input("\n> Do you want to set a new prefix? [Y/N]: ").strip().lower() == 'y':
+                # Si es la primera vez (prefijo None) o si el usuario quiere cambiar
+                if input("\n> Do you want to set a new prefix? [Y/N]: ").strip().lower() == 'y':
                     folder_prefix = input("> Enter new prefix (leave empty for 'File'): ").strip()
                     if not folder_prefix:
+                        folder_prefix = "File"
+                else:
+                    # Si dice que no y el prefijo actual es None, usar "File" por defecto
+                    if folder_prefix is None:
                         folder_prefix = "File"
                 
                 # Preguntar si quiere cambiar la numeración
                 folder_start_number = current_start
                 if input("> Do you want to change the start numbering? [Y/N]: ").strip().lower() == 'y':
                     folder_start_number = int(input("> Start numbering from: ").strip())
+                else:
+                    # Si dice que no y es la primera vez (current_start es None), usar 1
+                    if folder_start_number is None:
+                        folder_start_number = 1
                 
                 print(f"\nRenaming files with prefix '{folder_prefix}' starting from {folder_start_number}...")
                 print("-" * 50)
@@ -591,7 +600,7 @@ def rename_files(directory, prefix, current_start, current_end, new_start, dupli
 
 
 def rollback(directory):
-    """Revierte TODAS las operaciones, incluyendo backups y sobrescrituras"""
+    """Revierte TODAS las operaciones de forma interactiva por carpeta"""
     try:
         directory = os.path.abspath(directory)
         check_write_permissions(directory)
@@ -617,72 +626,145 @@ def rollback(directory):
         print("\n" + "="*60)
         print("ROLLBACK OPERATION")
         print("="*60)
-        print(f"Directory: {directory}")
-        print(f"Operations to revert: {len(operations)}")
+        print(f"Base directory: {directory}")
+        print(f"Total operations to revert: {len(operations)}")
         print(f"Original operation time: {data['timestamp']}")
         print("="*60)
         
-        if input("\nProceed with rollback? (Y/N): ").lower() != 'y':
+        if input("\nProceed with rollback? [Y/N]: ").lower() != 'y':
             print("Rollback cancelled by user.")
             return
         
-        print("\nREVERTING CHANGES...")
-        print("-" * 50)
+        # Agrupar operaciones por carpeta
+        operations_by_folder = {}
+        for op in operations:
+            folder_path = os.path.dirname(op.new_path)
+            if folder_path not in operations_by_folder:
+                operations_by_folder[folder_path] = []
+            operations_by_folder[folder_path].append(op)
         
-        successful_rollbacks = 0
-        failed_rollbacks = 0
+        # Separar carpeta principal de subcarpetas
+        main_folder_ops = []
+        subfolder_ops = {}
         
-        # Revertir cada operación en orden inverso
-        for op in reversed(operations):
-            try:
-                if op.operation_type == "rename":
-                    # Renombrado simple: revertir el nombre
-                    if os.path.exists(op.new_path):
-                        os.rename(op.new_path, op.old_path)
-                        print(f"[OK] Reverted: {os.path.basename(op.new_path)} -> {os.path.basename(op.old_path)}")
-                        successful_rollbacks += 1
-                    else:
-                        print(f"[SKIP] File not found: {os.path.basename(op.new_path)}")
-                        failed_rollbacks += 1
-                
-                elif op.operation_type == "backup":
-                    # Restaurar el archivo del backup
-                    if os.path.exists(op.new_path):
-                        os.rename(op.new_path, op.old_path)
-                        print(f"[OK] Reverted: {os.path.basename(op.new_path)} -> {os.path.basename(op.old_path)}")
-                    
-                    if op.backup_path and os.path.exists(op.backup_path):
-                        # Restaurar el archivo original que fue respaldado
-                        shutil.move(op.backup_path, op.new_path)
-                        print(f"[OK] Restored from backup: {os.path.basename(op.new_path)}")
-                    
-                    successful_rollbacks += 1
-                
-                elif op.operation_type == "overwrite":
-                    # Restaurar archivo sobrescrito
-                    if os.path.exists(op.new_path):
-                        os.rename(op.new_path, op.old_path)
-                        print(f"[OK] Reverted: {os.path.basename(op.new_path)} -> {os.path.basename(op.old_path)}")
-                    
-                    if op.backup_path and os.path.exists(op.backup_path):
-                        # Restaurar el archivo que fue sobrescrito
-                        shutil.move(op.backup_path, op.new_path)
-                        print(f"[OK] Restored overwritten file: {os.path.basename(op.new_path)}")
-                    
-                    successful_rollbacks += 1
-                
-            except Exception as e:
-                print(f"[ERROR] Failed to revert {os.path.basename(op.new_path)}: {e}")
-                failed_rollbacks += 1
-                log_action(f"Error during rollback: {e}")
+        for folder, ops in operations_by_folder.items():
+            rel_path = os.path.relpath(folder, directory)
+            if rel_path == ".":
+                main_folder_ops = ops
+            else:
+                subfolder_ops[folder] = ops
         
-        print("-" * 50)
+        total_successful = 0
+        total_failed = 0
+        
+        # Función para revertir operaciones en una carpeta
+        def revert_folder_operations(folder_ops, folder_name):
+            nonlocal total_successful, total_failed
+            
+            print(f"\nReverting {len(folder_ops)} operation(s) in: {folder_name}")
+            print("-" * 50)
+            
+            successful = 0
+            failed = 0
+            
+            for op in reversed(folder_ops):
+                try:
+                    if op.operation_type == "rename":
+                        if os.path.exists(op.new_path):
+                            os.rename(op.new_path, op.old_path)
+                            print(f"[OK] Reverted: {os.path.basename(op.new_path)} -> {os.path.basename(op.old_path)}")
+                            successful += 1
+                        else:
+                            print(f"[SKIP] File not found: {os.path.basename(op.new_path)}")
+                            failed += 1
+                    
+                    elif op.operation_type == "backup":
+                        if os.path.exists(op.new_path):
+                            os.rename(op.new_path, op.old_path)
+                            print(f"[OK] Reverted: {os.path.basename(op.new_path)} -> {os.path.basename(op.old_path)}")
+                        
+                        if op.backup_path and os.path.exists(op.backup_path):
+                            shutil.move(op.backup_path, op.new_path)
+                            print(f"[OK] Restored from backup: {os.path.basename(op.new_path)}")
+                        
+                        successful += 1
+                    
+                    elif op.operation_type == "overwrite":
+                        if os.path.exists(op.new_path):
+                            os.rename(op.new_path, op.old_path)
+                            print(f"[OK] Reverted: {os.path.basename(op.new_path)} -> {os.path.basename(op.old_path)}")
+                        
+                        if op.backup_path and os.path.exists(op.backup_path):
+                            shutil.move(op.backup_path, op.new_path)
+                            print(f"[OK] Restored overwritten file: {os.path.basename(op.new_path)}")
+                        
+                        successful += 1
+                    
+                except Exception as e:
+                    print(f"[ERROR] Failed to revert {os.path.basename(op.new_path)}: {e}")
+                    failed += 1
+                    log_action(f"Error during rollback: {e}")
+            
+            print("-" * 50)
+            print(f"Folder complete - Successful: {successful}, Failed: {failed}")
+            
+            total_successful += successful
+            total_failed += failed
+        
+        # Primero, revertir la carpeta principal si tiene operaciones
+        if main_folder_ops:
+            print("\nREVERTING MAIN FOLDER")
+            print("="*50)
+            revert_folder_operations(main_folder_ops, "MAIN FOLDER")
+        
+        # Si hay subcarpetas, preguntar si quiere revertirlas
+        if subfolder_ops:
+            print(f"\n\nFound operations in {len(subfolder_ops)} subfolder(s):")
+            
+            # Mostrar lista de subcarpetas
+            subfolders_list = []
+            for i, (folder_path, ops) in enumerate(subfolder_ops.items(), 1):
+                rel_path = os.path.relpath(folder_path, directory)
+                subfolders_list.append((folder_path, ops, rel_path))
+                print(f"  {i}. {rel_path} ({len(ops)} operations)")
+            
+            choice = input("\nDo you want to revert changes in subfolders? [Y/N]: ").strip().lower()
+            
+            if choice == 'y':
+                print("\nWhich subfolders do you want to revert?")
+                print("  A. All subfolders")
+                print("  S. Select specific subfolders")
+                print("  N. None")
+                sub_choice = input("Choice [A/S/N]: ").strip().upper()
+                
+                selected_folders = []
+                
+                if sub_choice == 'A':
+                    selected_folders = subfolders_list
+                elif sub_choice == 'S':
+                    print("\nEnter subfolder numbers separated by commas (e.g., 1,3,5):")
+                    numbers = input("Subfolders: ").strip()
+                    
+                    try:
+                        indices = [int(n.strip()) - 1 for n in numbers.split(',')]
+                        for idx in indices:
+                            if 0 <= idx < len(subfolders_list):
+                                selected_folders.append(subfolders_list[idx])
+                    except:
+                        print("Invalid selection. Skipping subfolders.")
+                
+                # Revertir las subcarpetas seleccionadas
+                for folder_path, ops, rel_path in selected_folders:
+                    print(f"\nREVERTING SUBFOLDER: {rel_path}")
+                    print("="*50)
+                    revert_folder_operations(ops, rel_path)
+        
+        print("\n" + "="*60)
         
         # Limpiar directorios de backup si están vacíos
         backup_dir = os.path.join(directory, ".rename_backups")
         if os.path.exists(backup_dir):
             try:
-                # Eliminar subdirectorios vacíos
                 for root, dirs, files in os.walk(backup_dir, topdown=False):
                     if not files and not dirs:
                         os.rmdir(root)
@@ -691,15 +773,16 @@ def rollback(directory):
                 pass
         
         # Eliminar el archivo de mapeo después del rollback exitoso
-        os.remove(MAPPING_FILE)
+        if total_successful > 0 or total_failed == 0:
+            os.remove(MAPPING_FILE)
+            print("[OK] Mapping file removed")
         
         print(f"\nROLLBACK COMPLETED!")
         print(f"Summary:")
-        print(f"   - Successful rollbacks: {successful_rollbacks}")
-        print(f"   - Failed rollbacks: {failed_rollbacks}")
-        print(f"   - Mapping file removed: YES")
+        print(f"   - Total successful rollbacks: {total_successful}")
+        print(f"   - Total failed rollbacks: {total_failed}")
         
-        log_action(f"Rollback completed. Success: {successful_rollbacks}, Failed: {failed_rollbacks}")
+        log_action(f"Rollback completed. Success: {total_successful}, Failed: {total_failed}")
     
     except Exception as e:
         print(f"\nRollback error: {e}")
