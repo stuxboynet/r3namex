@@ -24,12 +24,14 @@ Batch file renaming tool with rollback functionality – efficient, simple, and 
 Rename multiple files with custom prefixes and numbering, handle duplicates intelligently,
 and rollback changes when needed. Perfect for organizing photos, documents, and any file collections.
 
-Usage: r3namex.py [-h] [-l LOCATION] [-p PREFIX] [-a] [-cs CURRENT_START]
+Usage: r3namex.py [-h] [-v] [-u] [-l LOCATION] [-p PREFIX] [-a] [-cs CURRENT_START]
                   [-ce CURRENT_END] [-ns NEW_START] [-r]
                   [-ds {skip,suffix,backup,overwrite,ask}]
 
 Options:
   -h, --help            Show this help message and exit
+  -v, --version         Show version information
+  -u, --update          Check for updates
   -l, --location        Folder where files are located
   -p, --prefix          Prefix of files (optional)
   -a, --all             Interactive rename for all files in directory and subfolders
@@ -64,8 +66,6 @@ To handle duplicates:
     python r3namex.py --location /my/folder --prefix Photo --current-start 1 --current-end 5 --new-start 1 --duplicate-strategy suffix
 
 ```
-
-
 
 
 ## 🚀 Features
